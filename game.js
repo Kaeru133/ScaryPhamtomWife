@@ -33,7 +33,12 @@ const MAZE_DATA = [
 
 let walls = [];
 let ectoplasms = [];
-let GameState = "PLAYING";
+let GameState = "INTRO";
+let player;
+let enemies = [];
+const keys = {};
+let introTimer = 3;
+let introLastUpdate = 0;
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 function playBeep() {
@@ -54,15 +59,14 @@ class Player {
     reset() {
         this.x = TILE_SIZE * 1.5;
         this.y = TILE_SIZE * 1.5;
-        this.radius = 14;
-        this.speed = 3.0; // Slightly slower base speed because movement is automatic now
+        this.radius = 12;
+        this.speed = 3.2; 
         this.vx = 0;
         this.vy = 0;
         this.phasing = false;
         this.phaseMeter = 100;
     }
     update(keys) {
-        // Change direction on tap
         if (keys['w']) { this.vx = 0; this.vy = -this.speed; }
         if (keys['s']) { this.vx = 0; this.vy = this.speed; }
         if (keys['a']) { this.vx = -this.speed; this.vy = 0; }
@@ -83,24 +87,24 @@ class Player {
         let nextX = this.x + this.vx;
         let nextY = this.y + this.vy;
 
-        let collision = false;
-        if (!this.phasing) {
-            for (let wall of walls) {
-                if (nextX + this.radius > wall.x && nextX - this.radius < wall.x + TILE_SIZE &&
-                    nextY + this.radius > wall.y && nextY - this.radius < wall.y + TILE_SIZE) {
-                    collision = true;
-                    break;
-                }
+        let col = this.checkCollision(nextX, nextY);
+        
+        if (col && !this.phasing) {
+            const nudge = 10;
+            if (this.vy !== 0) {
+                if (!this.checkCollision(nextX + nudge, nextY)) { this.x += 2; col = false; }
+                else if (!this.checkCollision(nextX - nudge, nextY)) { this.x -= 2; col = false; }
+            } else if (this.vx !== 0) {
+                if (!this.checkCollision(nextX, nextY + nudge)) { this.y += 2; col = false; }
+                else if (!this.checkCollision(nextX, nextY - nudge)) { this.y -= 2; col = false; }
             }
         }
 
-        if (!collision) {
-            this.x = nextX;
-            this.y = nextY;
+        if (!col || this.phasing) {
+            this.x += this.vx;
+            this.y += this.vy;
         } else {
-            // Stop if hit wall and NOT phasing
-            this.vx = 0;
-            this.vy = 0;
+            this.vx = 0; this.vy = 0;
         }
 
         this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
@@ -116,13 +120,20 @@ class Player {
             }
         }
     }
+    checkCollision(nx, ny) {
+        for (let w of walls) {
+            if (nx + this.radius > w.x && nx - this.radius < w.x + TILE_SIZE &&
+                ny + this.radius > w.y && ny - this.radius < w.y + TILE_SIZE) return true;
+        }
+        return false;
+    }
     draw() {
-        ctx.beginPath();ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
         ctx.fillStyle = this.phasing ? DARK_PURPLE : NEON_PURPLE;
         ctx.fill();
         if (this.phasing) {
             ctx.strokeStyle = NEON_PURPLE; ctx.lineWidth = 2;
-            ctx.beginPath();ctx.arc(this.x, this.y, this.radius + 4, 0, Math.PI * 2);
+            ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 4, 0, Math.PI * 2);
             ctx.stroke();
         }
     }
@@ -130,55 +141,25 @@ class Player {
 
 class Enemy {
     constructor(x, y, type) {
-        this.x = x;
-        this.y = y;
-        this.type = type; // "direct", "predict", "ambush", "patrol", "random"
-        this.radius = 16;
-        this.speed = 1.8;
-        this.vx = 0;
-        this.vy = 0;
+        this.x = x; this.y = y; this.type = type;
+        this.radius = 16; this.speed = 1.65;
     }
     update(p) {
-        let targetX = p.x;
-        let targetY = p.y;
+        let tx = p.x, ty = p.y;
+        if (this.type === "predict") { tx += p.vx * 35; ty += p.vy * 35; }
+        else if (this.type === "ambush") { tx -= p.vx * 20; ty -= p.vy * 20; }
 
-        if (this.type === "predict") {
-            // Predict where player is going (target a spot 80px ahead)
-            targetX = p.x + (p.vx * 25);
-            targetY = p.y + (p.vy * 25);
-        } else if (this.type === "ambush") {
-            // Hardcode target to the center to "block" the player if they come near
-            if (Math.hypot(p.x - 400, p.y - 300) > 200) {
-                targetX = 400; targetY = 300;
-            }
-        } else if (this.type === "patrol") {
-            // Circles the middle
-            let time = Date.now() / 1000;
-            targetX = 400 + Math.cos(time) * 200;
-            targetY = 300 + Math.sin(time) * 150;
-        }
-
-        let dx = targetX - this.x;
-        let dy = targetY - this.y;
+        let dx = tx - this.x, dy = ty - this.y;
         let dist = Math.hypot(dx, dy);
-        
-        if (dist > 5) {
-            let mvx = (dx / dist) * this.speed;
-            let mvy = (dy / dist) * this.speed;
-            
-            // Simple pathfinding: try move, if wall, slide
-            if (!this.checkWall(this.x + mvx, this.y + mvy)) {
-                this.x += mvx; this.y += mvy;
-            } else if (!this.checkWall(this.x + mvx, this.y)) {
-                this.x += mvx;
-            } else if (!this.checkWall(this.x, this.y + mvy)) {
-                this.y += mvy;
-            }
+        if (dist > 1) {
+            let mx = (dx / dist) * this.speed, my = (dy / dist) * this.speed;
+            if (!this.checkWall(this.x + mx, this.y + my)) { this.x += mx; this.y += my; }
+            else if (!this.checkWall(this.x + mx, this.y)) { this.x += mx; }
+            else if (!this.checkWall(this.x, this.y + my)) { this.y += my; }
+            else { this.x += (Math.random() - 0.5) * 4; this.y += (Math.random() - 0.5) * 4; }
         }
 
-        if (Math.hypot(this.x - p.x, this.y - p.y) < this.radius + p.radius - 6) {
-            GameState = "LOSS";
-        }
+        if (Math.hypot(this.x - p.x, this.y - p.y) < this.radius + p.radius - 5) { GameState = "LOSS"; }
     }
     checkWall(nx, ny) {
         for (let w of walls) {
@@ -188,24 +169,18 @@ class Enemy {
         return false;
     }
     draw() {
-        ctx.fillStyle = YELLOW;
-        ctx.beginPath();
-        // Drawing slightly different eye colors to differentiate types
+        ctx.fillStyle = YELLOW; ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0.2 * Math.PI, 1.8 * Math.PI);
-        ctx.lineTo(this.x, this.y);
-        ctx.fill();
-        ctx.fillStyle = "black";
-        ctx.beginPath(); ctx.arc(this.x + 2, this.y - 6, 3, 0, Math.PI*2); ctx.fill();
+        ctx.lineTo(this.x, this.y); ctx.fill();
+        ctx.fillStyle = "black"; ctx.beginPath(); ctx.arc(this.x + 4, this.y - 6, 3, 0, Math.PI * 2); ctx.fill();
     }
 }
 
-let player = new Player();
-let enemies = [];
-const keys = {};
+player = new Player();
 
 function init() {
-    walls = []; ectoplasms = []; enemies = []; GameState = "PLAYING";
-    player.reset();
+    walls = []; ectoplasms = []; enemies = []; GameState = "INTRO";
+    player.reset(); introTimer = 3; introLastUpdate = Date.now();
     MAZE_DATA.forEach((row, r) => {
         row.split('').forEach((char, c) => {
             let x = c * TILE_SIZE, y = r * TILE_SIZE;
@@ -213,27 +188,27 @@ function init() {
             else if (char === '0') ectoplasms.push({x: x + 16, y: y + 16});
         });
     });
-    // Add 5 Hunters with various AI behaviors
-    enemies.push(new Enemy(720, 520, "direct"));  // Blinky
-    enemies.push(new Enemy(720, 40, "predict"));  // Pinky
-    enemies.push(new Enemy(40, 520, "patrol"));   // Inky
-    enemies.push(new Enemy(400, 300, "ambush"));  // Clyde
-    enemies.push(new Enemy(720, 300, "random"));  // Shadow
+    enemies.push(new Enemy(710, 510, "direct"));
+    enemies.push(new Enemy(710, 50, "predict"));
+    enemies.push(new Enemy(50, 510, "direct"));
+    enemies.push(new Enemy(400, 310, "ambush"));
+    enemies.push(new Enemy(710, 310, "predict"));
 }
 
 window.addEventListener('keydown', e => {
     keys[e.key.toLowerCase()] = true;
-    if (e.key === 'r' && GameState !== "PLAYING") init();
+    if (e.key === 'r' && GameState !== "PLAYING" && GameState !== "INTRO") init();
     if (e.key === ' ') e.preventDefault();
 });
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
 function loop() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (GameState === "PLAYING") {
-        player.update(keys);
-        enemies.forEach(e => e.update(player));
+    if (GameState === "INTRO") {
+        let now = Date.now();
+        if (now - introLastUpdate > 1000) { introTimer--; introLastUpdate = now; if (introTimer <= 0) GameState = "PLAYING"; }
     }
+    if (GameState === "PLAYING") { player.update(keys); enemies.forEach(e => e.update(player)); }
     ctx.fillStyle = WALL_COLOR; ctx.strokeStyle = NEON_PURPLE;
     walls.forEach(w => { ctx.fillRect(w.x, w.y, TILE_SIZE, TILE_SIZE); ctx.strokeRect(w.x, w.y, TILE_SIZE, TILE_SIZE); });
     ctx.fillStyle = NEON_CYAN;
@@ -241,8 +216,14 @@ function loop() {
     player.draw();
     enemies.forEach(e => e.draw());
     scoreElement.innerText = `Ectoplasms: ${ectoplasms.length}`;
-    if (GameState !== "PLAYING") {
-        ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    if (GameState === "INTRO") {
+        ctx.fillStyle = "rgba(15, 10, 20, 0.8)"; ctx.fillRect(0, 0, 800, 600);
+        ctx.textAlign = "center"; ctx.fillStyle = NEON_PURPLE; ctx.font = "bold 60px Arial";
+        ctx.fillText("ScaryPhantomWife", 400, 280);
+        ctx.fillStyle = NEON_CYAN; ctx.font = "bold 80px Arial"; ctx.fillText(introTimer, 400, 380);
+    }
+    if (GameState === "WIN" || GameState === "LOSS") {
+        ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.textAlign = "center"; ctx.font = "bold 48px Arial";
         if (GameState === "WIN") { ctx.fillStyle = NEON_CYAN; ctx.fillText("YOU SURVIVED!", 400, 300); }
         else { ctx.fillStyle = NEON_PURPLE; ctx.fillText("GAME OVER!", 400, 300); }
