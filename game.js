@@ -142,29 +142,51 @@ class Player {
 class Enemy {
     constructor(x, y, type) {
         this.x = x; this.y = y; this.type = type;
-        this.radius = 16; this.speed = 1.65;
+        this.radius = 12; // Reduced slightly to allow better passage
+        this.speed = 1.6;
     }
     update(p) {
         let tx = p.x, ty = p.y;
         if (this.type === "predict") { tx += p.vx * 35; ty += p.vy * 35; }
-        else if (this.type === "ambush") { tx -= p.vx * 20; ty -= p.vy * 20; }
+        else if (this.type === "ambush") { tx -= p.vx * 25; ty -= p.vy * 25; }
 
         let dx = tx - this.x, dy = ty - this.y;
         let dist = Math.hypot(dx, dy);
+        
         if (dist > 1) {
-            let mx = (dx / dist) * this.speed, my = (dy / dist) * this.speed;
-            if (!this.checkWall(this.x + mx, this.y + my)) { this.x += mx; this.y += my; }
-            else if (!this.checkWall(this.x + mx, this.y)) { this.x += mx; }
-            else if (!this.checkWall(this.x, this.y + my)) { this.y += my; }
-            else { this.x += (Math.random() - 0.5) * 4; this.y += (Math.random() - 0.5) * 4; }
+            let mx = (dx / dist) * this.speed;
+            let my = (dy / dist) * this.speed;
+
+            // PRECISE SLIDING LOGIC:
+            // 1. Try moving diagonally
+            if (!this.checkWall(this.x + mx, this.y + my)) {
+                this.x += mx; this.y += my;
+            } 
+            // 2. Try moving just horizontally (slid along wall)
+            else if (!this.checkWall(this.x + mx, this.y)) {
+                this.x += mx;
+            } 
+            // 3. Try moving just vertically (slid along wall)
+            else if (!this.checkWall(this.x, this.y + my)) {
+                this.y += my;
+            } 
+            // 4. CORNER RECOVERY: If stuck, try to move away from the nearest wall slowly
+            else {
+                this.x += (tx > this.x ? 0.5 : -0.5);
+                this.y += (ty > this.y ? 0.5 : -0.5);
+            }
         }
 
-        if (Math.hypot(this.x - p.x, this.y - p.y) < this.radius + p.radius - 5) { GameState = "LOSS"; }
+        if (Math.hypot(this.x - p.x, this.y - p.y) < this.radius + p.radius - 2) { 
+            GameState = "LOSS"; 
+        }
     }
     checkWall(nx, ny) {
+        // Tightened collision box for AI to prevent "shoulder-smacking" into corners
+        const buffer = 2;
         for (let w of walls) {
-            if (nx + this.radius > w.x && nx - this.radius < w.x + TILE_SIZE &&
-                ny + this.radius > w.y && ny - this.radius < w.y + TILE_SIZE) return true;
+            if (nx + this.radius - buffer > w.x && nx - this.radius + buffer < w.x + TILE_SIZE &&
+                ny + this.radius - buffer > w.y && ny - this.radius + buffer < w.y + TILE_SIZE) return true;
         }
         return false;
     }
@@ -172,7 +194,7 @@ class Enemy {
         ctx.fillStyle = YELLOW; ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0.2 * Math.PI, 1.8 * Math.PI);
         ctx.lineTo(this.x, this.y); ctx.fill();
-        ctx.fillStyle = "black"; ctx.beginPath(); ctx.arc(this.x + 4, this.y - 6, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "black"; ctx.beginPath(); ctx.arc(this.x + 3, this.y - 4, 3, 0, Math.PI * 2); ctx.fill();
     }
 }
 
@@ -188,11 +210,12 @@ function init() {
             else if (char === '0') ectoplasms.push({x: x + 16, y: y + 16});
         });
     });
-    enemies.push(new Enemy(710, 510, "direct"));
-    enemies.push(new Enemy(710, 50, "predict"));
-    enemies.push(new Enemy(50, 510, "direct"));
-    enemies.push(new Enemy(400, 310, "ambush"));
-    enemies.push(new Enemy(710, 310, "predict"));
+    // Set Hunters to path centers (Y offsets: 60, 140, 220, etc.)
+    enemies.push(new Enemy(740, 60, "direct"));
+    enemies.push(new Enemy(740, 540, "predict"));
+    enemies.push(new Enemy(60, 540, "direct"));
+    enemies.push(new Enemy(420, 300, "ambush"));
+    enemies.push(new Enemy(60, 60, "predict"));
 }
 
 window.addEventListener('keydown', e => {
